@@ -1,4 +1,4 @@
-embed_model: "models/Qwen3-Embedding-4B-Q5_K_M.gguf"
+embed_model: "C:/Users/Yujun Ming/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-4B-GGUF/snapshots/f4602530db1d980e16da9d7d3a70294cf5c190be/Qwen3-Embedding-4B-Q5_K_M.gguf"
 top_k: 10
 num_candidates: 50
 ensemble_method: "rrf"
@@ -6,7 +6,7 @@ ranker_weights: {"faiss":1,"bm25":0,"index_keywords":0}
 rrf_k: 60
 max_gen_tokens: 400
 chunk_mode : "recursive_sections"
-gen_model: "models/qwen2.5-3b-instruct-q8_0.gguf"
+gen_model: "C:/Users/Yujun Ming/.cache/huggingface/hub/models--Qwen--Qwen3-1.7B-GGUF/snapshots/90862c4b9d2787eaed51d12237eafdfe7c5f6077/Qwen3-1.7B-Q8_0.gguf"
 chunk_size: 2000
 chunk_overlap: 200
 use_hyde: false

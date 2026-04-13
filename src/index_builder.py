@@ -20,6 +20,7 @@ from src.embedder import SentenceTransformer
 
 from src.preprocessing.chunking import DocumentChunker, ChunkConfig
 from src.preprocessing.extraction import extract_sections_from_markdown
+from src.sql.db import build_sql_db, compute_sql_eligible
 
 # ----- runtime parallelism knobs (avoid oversubscription) -----
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -137,7 +138,8 @@ def build_index(
                 continue
             
             # Prepare metadata
-            meta = {
+            chunk_page_numbers = sorted(list(chunk_pages))
+            base_meta = {
                 "filename": markdown_file,
                 "mode": chunk_config.to_string(),
                 "char_len": len(clean_chunk),
@@ -145,9 +147,12 @@ def build_index(
                 "section": c['heading'],
                 "section_path": full_section_path,
                 "text_preview": clean_chunk[:100],
-                "page_numbers": sorted(list(chunk_pages)),
-                "chunk_id": total_chunks + sub_chunk_id
+                "page_numbers": chunk_page_numbers,
+                "chunk_id": total_chunks + sub_chunk_id,
+                "chapter": chapter_num,
             }
+            sql_eligible, sql_reason = compute_sql_eligible(base_meta)
+            meta = {**base_meta, "sql_eligible": sql_eligible, "sql_reason": sql_reason}
 
             # Prepare chunk with prefix
             if use_headings:
@@ -225,6 +230,20 @@ def build_index(
     with open(artifacts_dir / f"{index_prefix}_meta.pkl", "wb") as f:
         pickle.dump(metadata, f)
     print(f"Saved all index artifacts with prefix: {index_prefix}")
+
+    # Step 6: Write intermediate chunks_meta JSON (human-readable, used by SQL builder)
+    meta_json_path = pathlib.Path(artifacts_dir) / f"{index_prefix}_chunks_meta.json"
+    with open(meta_json_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+    sql_eligible_count = sum(1 for m in metadata if m.get("sql_eligible", False))
+    print(
+        f"Saved intermediate chunks JSON: {meta_json_path} "
+        f"({sql_eligible_count}/{len(metadata)} chunks SQL-eligible)"
+    )
+
+    # Step 7: Build SQLite metadata database from the intermediate JSON
+    db_path = pathlib.Path(artifacts_dir) / f"{index_prefix}_metadata.db"
+    build_sql_db(meta_json_path, db_path)
 
 # ------------------------ Helper functions ------------------------------
 
