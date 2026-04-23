@@ -54,6 +54,9 @@ class RAGConfig:
     extracted_index_path: os.PathLike = "data/extracted_index.json"
     page_to_chunk_map_path: os.PathLike = "index/sections/textbook_index_page_to_chunk_map.json"
 
+    # hybrid SQL retrieval
+    enable_sql_hybrid: bool = False
+
     # user feedback modeling
     enable_topic_extraction: bool = False
 

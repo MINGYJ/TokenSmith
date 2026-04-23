@@ -2,7 +2,8 @@ embed_model: "C:/Users/Yujun Ming/.cache/huggingface/hub/models--Qwen--Qwen3-Emb
 top_k: 10
 num_candidates: 50
 ensemble_method: "rrf"
-ranker_weights: {"faiss":1,"bm25":0,"index_keywords":0}
+ranker_weights: {"faiss":0.4,"bm25":0,"index_keywords":0,"sql":0.6}
+enable_sql_hybrid: true
 rrf_k: 60
 max_gen_tokens: 400
 chunk_mode : "recursive_sections"

@@ -160,6 +160,32 @@ class BM25Retriever(Retriever):
         return scores
 
 
+class SQLRetriever(Retriever):
+    """
+    Tier 1 structural retriever.  Detects chapter / page / section patterns
+    in the query using regex and returns matching chunk_ids with a uniform
+    score of 1.0.  Returns {} for non-structural queries so the ranker falls
+    back to FAISS/BM25 scores unchanged, preserving original behaviour.
+    """
+    name = "sql"
+
+    def __init__(self, db_path: pathlib.Path):
+        self.db_path = pathlib.Path(db_path)
+
+    def get_scores(
+        self,
+        query: str,
+        pool_size: int,
+        chunks: List[str],
+    ) -> Dict[int, float]:
+        from src.sql.nl2sql import get_sql_chunk_ids
+        chunk_ids = get_sql_chunk_ids(query, self.db_path)
+        if not chunk_ids:
+            return {}  # not a structural query — FAISS/BM25 handle it
+        # Clamp to valid chunk index range; uniform score for RRF fusion
+        return {cid: 1.0 for cid in chunk_ids if 0 <= cid < len(chunks)}
+
+
 class IndexKeywordRetriever(Retriever):
     name = "index_keywords"
     

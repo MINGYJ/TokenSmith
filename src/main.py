@@ -22,7 +22,8 @@ from src.retriever import (
     filter_retrieved_chunks, 
     BM25Retriever, 
     FAISSRetriever, 
-    IndexKeywordRetriever, 
+    IndexKeywordRetriever,
+    SQLRetriever,
     get_page_numbers, 
     load_artifacts
 )
@@ -141,11 +142,18 @@ def get_answer(
         for retriever in retrievers:
             # print(f"Getting scores from retriever: {retriever.name}...")
             raw_scores[retriever.name] = retriever.get_scores(retrieval_query, pool_n, chunks)
-        # TODO: Fix retrieval logging.
+        #SQL Hybird Search:
+        #If SQL detected a structural signal (chapter/section/page), restrict
+        #all other retrievers to only SQL-matched candidates.  This makes the
+        #SQL match a hard filter rather than a soft weight
+        sql_hits = raw_scores.get("sql", {})
+        if sql_hits:
+            sql_candidates = set(sql_hits.keys())
+            print(f"  SQL filter active: restricting to {len(sql_candidates)} candidate(s) from structural match")
+            for name in raw_scores:
+                if name != "sql":
+                    raw_scores[name] = {k: v for k, v in raw_scores[name].items() if k in sql_candidates}
 
-        # print("Raw scores from retrievers:")
-        # for retriever_name, score_dict in raw_scores.items():
-        #     print(f"  {retriever_name}: {list(score_dict.values())}")
         # Step 2: Ranking
         ordered, scores = ranker.rank(raw_scores=raw_scores)
         # print(f"Ordered candidate indices after ranking: {ordered[:cfg.top_k]}")
@@ -290,6 +298,13 @@ def run_chat_session(args: argparse.Namespace, cfg: RAGConfig):
         retrievers = [FAISSRetriever(faiss_idx, cfg.embed_model), BM25Retriever(bm25_idx)]
         if cfg.ranker_weights.get("index_keywords", 0) > 0:
             retrievers.append(IndexKeywordRetriever(cfg.extracted_index_path, cfg.page_to_chunk_map_path))
+        if cfg.enable_sql_hybrid:
+            db_path = pathlib.Path(artifacts_dir) / f"{args.index_prefix}_metadata.db"
+            if db_path.exists():
+                retrievers.append(SQLRetriever(db_path))
+                print(f"  SQL retriever enabled: {db_path}")
+            else:
+                print(f"  Warning: SQL DB not found at {db_path}, skipping SQL retriever.")
         
         ranker = EnsembleRanker(ensemble_method=cfg.ensemble_method, weights=cfg.ranker_weights, rrf_k=int(cfg.rrf_k))
         print("Loaded retrievers and initialized ranker.")
