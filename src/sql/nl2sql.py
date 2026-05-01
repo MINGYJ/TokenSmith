@@ -21,8 +21,10 @@ from typing import List
 from src.sql.db import (
     query_chunks_by_chapter,
     query_chunks_by_section,
+    query_chunks_by_section_numeric,
     query_chunks_by_page,
     query_chunks_by_document,
+    get_section_names_for_chunks,
 )
 
 #match page name
@@ -43,9 +45,9 @@ _SECTION_NAMED_RE = re.compile(
     re.IGNORECASE,
 )
 
-#numeric dotted reference
+#numeric dotted reference — optional space so "Section5.1" also matches
 _SECTION_NUM_RE = re.compile(
-    r'\bsection\s+([\d]+(?:\.[\d]+)+)\b', re.IGNORECASE
+    r'\bsection\s*([\d]+(?:\.[\d]+)+)\b', re.IGNORECASE
 )
 
 
@@ -74,23 +76,41 @@ def get_sql_chunk_ids(query: str, db_path: Path) -> List[int]:
 
     chapter_num = int(chapter_m.group(1)) if chapter_m else 0
 
-    # 1. Page reference — most specific, return immediately
+    #Page reference — most specific, return immediately
     if page_m:
-        return query_chunks_by_page(db_path, int(page_m.group(1)))
+        ids = query_chunks_by_page(db_path, int(page_m.group(1)))
+        _print_sql_match_summary(ids, db_path)
+        return ids
 
-    # 2. Named section — "section on deadlocks" (optionally with chapter)
+    # Named section
     if section_named_m:
         keyword = section_named_m.group(1).strip()
-        return query_chunks_by_section(db_path, keyword, chapter=chapter_num)
+        ids = query_chunks_by_section(db_path, keyword, chapter=chapter_num)
+        _print_sql_match_summary(ids, db_path)
+        return ids
 
-    # 3. Numeric section — "section 13.2" (searches section_path column via LIKE)
+    #Section numeric — use prefix-exact match to avoid false positives
     if section_num_m:
         keyword = section_num_m.group(1)
-        return query_chunks_by_section(db_path, keyword, chapter=chapter_num)
+        ids = query_chunks_by_section_numeric(db_path, keyword, chapter=chapter_num)
+        _print_sql_match_summary(ids, db_path)
+        return ids
 
-    # 4. Chapter only — broadest structural match
+    #only vague chapter number
     if chapter_m:
-        return query_chunks_by_chapter(db_path, chapter_num)
+        ids = query_chunks_by_chapter(db_path, chapter_num)
+        _print_sql_match_summary(ids, db_path)
+        return ids
 
     # No structural signal detected — not a SQL query
     return []
+
+
+def _print_sql_match_summary(chunk_ids: List[int], db_path: Path) -> None:
+    """Print a compact section-level breakdown of SQL-matched chunks."""
+    if not chunk_ids:
+        return
+    sections = get_section_names_for_chunks(db_path, chunk_ids)
+    print(f"  SQL matched {len(chunk_ids)} chunk(s) across {len(sections)} section(s):")
+    for section, count in sections:
+        print(f"    [{count:>3} chunk(s)]  {section}")

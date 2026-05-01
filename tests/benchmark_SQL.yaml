@@ -1,0 +1,248 @@
+# benchmark_SQL.yaml
+#
+# Benchmarks that specifically exercise the nl2sql.py structural dispatcher.
+# Each entry targets one of the four SQL dispatch branches (noted in sql_dispatch_branch).
+# Run with:
+#   pytest tests/ --benchmark-file=benchmark_SQL.yaml -s
+#
+# Priority order (mirrors nl2sql.py):
+#   page  >  named-section  >  numeric-section  >  chapter
+#
+# Note: ideal_retrieved_chunks marked [] must be filled in after a first run
+#       with --use-golden-chunks. Known IDs are taken from cross-referencing
+#       the existing benchmarks.yaml annotations.
+
+benchmarks:
+
+  # ── Branch 1: Page reference ──────────────────────────────────────────────
+  # Fires _PAGE_RE.  Most specific; should return only chunks whose
+  # page_numbers list includes the given page.
+
+  - id: "sql_page_ch5_start"
+    question: "What topics are introduced on page 183?"
+    expected_answer: >
+      Page 183 opens Chapter 5 (Advanced SQL) with Section 5.1, which introduces
+      the two principal ways to access SQL from a general-purpose programming language:
+      embedded SQL (pre-compiled host-language code) and dynamic SQL via call-level
+      interfaces. The section then covers JDBC (the Java API for database connectivity
+      using Connection, Statement, and ResultSet objects), ODBC (the C-language
+      standard interface), and database access from Python using DB-API 2.0. Prepared
+      statements, metadata retrieval, and callable stored procedures are also discussed.
+    keywords:
+      ["JDBC", "ODBC", "embedded SQL", "programming language", "connection",
+       "result set", "prepared statement", "DB-API", "Python", "call-level interface"]
+    similarity_threshold: 0.65
+    ideal_retrieved_chunks: []
+    sql_dispatch_branch: "page"
+
+  - id: "sql_page_bptree"
+    question: "What is described on page 634?"
+    expected_answer: >
+      Page 634 begins Section 14.3 on B+-tree index files. A B+-tree is a balanced
+      tree index in which all search-key values appear in the leaf nodes, which are
+      linked in sorted order to support efficient range queries. Internal nodes serve
+      as a multilevel sparse index that guides search down to the correct leaf. The
+      order n of the tree determines the minimum and maximum number of pointers per
+      node, keeping the tree height low (O(log n) levels) so that search, insert, and
+      delete each require only a few disk I/Os.
+    keywords:
+      ["B+ tree", "leaf node", "internal node", "balanced", "range query", "order",
+       "search key", "pointer", "index", "disk I/O"]
+    similarity_threshold: 0.68
+    ideal_retrieved_chunks: [908, 909, 905, 906, 907]
+    sql_dispatch_branch: "page"
+
+  # ── Branch 2: Named section ───────────────────────────────────────────────
+  # Fires _SECTION_NAMED_RE.  Keyword extracted and passed to
+  # query_chunks_by_section (substring LIKE on the section column).
+
+  - id: "sql_named_deadlock"
+    question: "What does the section on deadlock handling explain?"
+    expected_answer: >
+      The section on deadlock handling (Section 18.2) covers two complementary strategies.
+      Deadlock prevention assigns timestamps to transactions and uses either the wait-die
+      scheme (an older transaction waits; a younger one is rolled back) or the wound-wait
+      scheme (an older transaction preempts a younger one; the younger is rolled back) to
+      ensure that circular waits cannot form. Deadlock detection constructs a waits-for
+      graph; a cycle in this graph signals a deadlock, and the system selects a victim
+      transaction to roll back — either totally or partially — to break the cycle.
+      Timeouts provide a practical approximation when building a full graph is too costly.
+    keywords:
+      ["deadlock", "wait-die", "wound-wait", "waits-for graph", "victim", "rollback",
+       "cycle", "prevention", "detection", "timeout", "preempt", "timestamp"]
+    similarity_threshold: 0.70
+    ideal_retrieved_chunks: []
+    sql_dispatch_branch: "named_section"
+
+  - id: "sql_named_snapshot_isolation"
+    question: "Explain the section on snapshot isolation."
+    expected_answer: >
+      Snapshot isolation (Section 18.8) is a multiversion concurrency-control technique
+      in which each transaction reads from a consistent snapshot of the database taken at
+      the moment the transaction begins, so reads never block writers and writers never
+      block readers. A transaction's writes are made visible only at commit time.
+      Write-write conflicts are detected: if two concurrent transactions update the same
+      data item, one is aborted. Snapshot isolation prevents dirty reads, non-repeatable
+      reads, and most phantoms, but does not guarantee serializability — the write-skew
+      anomaly can still occur. Serializable snapshot isolation (SSI) adds conflict
+      detection to close this gap.
+    keywords:
+      ["snapshot isolation", "multiversion", "write-write conflict", "write skew",
+       "serializable snapshot isolation", "SSI", "phantom", "dirty read",
+       "non-repeatable read", "concurrent"]
+    similarity_threshold: 0.70
+    ideal_retrieved_chunks: []
+    sql_dispatch_branch: "named_section"
+
+  # ── Branch 2b: Named section + chapter qualifier ──────────────────────────
+  # Both _SECTION_NAMED_RE and _CHAPTER_RE fire; chapter is used to narrow
+  # the query_chunks_by_section fallback path.
+
+  - id: "sql_named_with_chapter_buffer"
+    question: "What does the section on buffer management in chapter 19 cover?"
+    expected_answer: >
+      Section 19.5 (Buffer Management) describes how the recovery system interacts
+      with the buffer manager. The force policy writes all updated pages to disk at
+      commit, simplifying recovery (no redo needed) but hurting performance. The
+      no-force policy defers writes for performance but requires redo during recovery.
+      The steal policy allows dirty (uncommitted) pages to be evicted from the buffer,
+      requiring undo on abort; the no-steal policy prevents this at the cost of buffer
+      pressure. Write-ahead logging (WAL) mandates that the log record for an update
+      must be written to stable storage before the corresponding data page — ensuring
+      undo information is always available. Log-record buffering batches log writes to
+      reduce I/O, subject to the WAL constraint.
+    keywords:
+      ["buffer management", "force", "no-force", "steal", "no-steal",
+       "write-ahead logging", "WAL", "log-record buffering", "redo", "undo",
+       "stable storage", "dirty page"]
+    similarity_threshold: 0.68
+    ideal_retrieved_chunks: []
+    sql_dispatch_branch: "named_section_with_chapter"
+
+  # ── Branch 3: Numeric section ─────────────────────────────────────────────
+  # Fires _SECTION_NUM_RE (optional space between "section" and the number).
+  # Uses query_chunks_by_section_numeric — prefix-exact match on the section
+  # column, so "5.1" matches "Section 5.1 …" and "Section 5.1.x …" only.
+
+  - id: "sql_numeric_section_5_1"
+    question: "What does section 5.1 cover?"
+    expected_answer: >
+      Section 5.1 (Accessing SQL from a Programming Language) explains that real
+      applications rarely issue SQL interactively; instead they embed SQL within a
+      host-language program. The section presents two approaches: dynamic SQL via
+      call-level interfaces (JDBC for Java, ODBC for C/C++, DB-API 2 for Python) and
+      static embedded SQL. JDBC topics include opening a connection, creating Statement
+      and PreparedStatement objects, executing queries, iterating over ResultSet objects,
+      handling SQLExceptions, and retrieving metadata. ODBC covers the equivalent C API.
+      Python's DB-API 2 is introduced alongside its cursor model.
+    keywords:
+      ["JDBC", "ODBC", "Python", "DB-API", "PreparedStatement", "ResultSet",
+       "connection", "cursor", "embedded SQL", "host language", "metadata"]
+    similarity_threshold: 0.72
+    ideal_retrieved_chunks: []
+    sql_dispatch_branch: "numeric_section"
+
+  - id: "sql_numeric_section_nospace"
+    question: "Describe what Section14.3 covers."
+    expected_answer: >
+      Section 14.3 covers B+-tree index files. Each internal node of a B+-tree stores
+      n−1 search keys and n pointers, where n is the order of the tree; all values
+      appear in the leaf nodes, which are linked in a doubly-linked chain for range
+      scans. Insertion into a full leaf causes a split: the node is divided and the
+      middle key is pushed up to the parent, propagating upward to create a new root
+      if necessary. Deletion merges a node with a sibling or redistributes keys when
+      occupancy drops below the minimum. The height is O(log_n(K)) for K search-key
+      values, keeping the number of I/Os per operation very small.
+    keywords:
+      ["B+ tree", "leaf node", "internal node", "split", "merge", "redistribute",
+       "order", "search key", "range scan", "height", "I/O", "pointer"]
+    similarity_threshold: 0.72
+    ideal_retrieved_chunks: [908, 909, 940, 937, 938]
+    sql_dispatch_branch: "numeric_section_nospace"
+
+  - id: "sql_numeric_section_19_9"
+    question: "What is covered in section 19.9?"
+    expected_answer: >
+      Section 19.9 describes the ARIES recovery algorithm. ARIES stamps every database
+      page with a log sequence number (LSN) and uses write-ahead logging to guarantee
+      that an undo record always exists before a data page reaches disk. Recovery
+      proceeds in three passes: (1) Analysis — scans the log forward from the most
+      recent checkpoint to rebuild the dirty-page table and the set of active (uncommitted)
+      transactions at the time of the crash; (2) Redo — replays every logged update in
+      LSN order to restore the exact database state at crash time, including updates of
+      transactions that were active; (3) Undo — traverses the log backward and rolls back
+      all transactions that were active at crash time using compensation log records (CLRs)
+      so that the undo itself is never repeated if another crash occurs during recovery.
+    keywords:
+      ["ARIES", "log sequence number", "LSN", "write-ahead log", "WAL",
+       "analysis pass", "redo pass", "undo pass", "compensation log record", "CLR",
+       "checkpoint", "dirty page table", "crash recovery"]
+    similarity_threshold: 0.75
+    ideal_retrieved_chunks: [1355, 1356, 1358, 1353, 1359]
+    sql_dispatch_branch: "numeric_section"
+
+  - id: "sql_numeric_section_18_2"
+    question: "Summarize section 18.2."
+    expected_answer: >
+      Section 18.2 (Deadlock Handling) presents deadlock prevention and deadlock
+      detection. Prevention assigns each transaction a unique timestamp at start time
+      and enforces one of two schemes when a transaction requests a lock held by another:
+      wait-die (the older transaction waits; the younger is rolled back) or wound-wait
+      (the older preempts the younger, which is rolled back). Both guarantee no cycles in
+      the waits-for graph. Detection allows deadlocks to form and periodically checks
+      the waits-for graph for cycles; upon detection a victim is chosen based on how far
+      it has progressed or how many resources it holds and is rolled back either totally
+      or partially using savepoints.
+    keywords:
+      ["deadlock prevention", "deadlock detection", "wait-die", "wound-wait",
+       "waits-for graph", "cycle", "victim", "timestamp", "rollback", "savepoint",
+       "preempt"]
+    similarity_threshold: 0.70
+    ideal_retrieved_chunks: []
+    sql_dispatch_branch: "numeric_section"
+
+  # ── Branch 4: Chapter only ────────────────────────────────────────────────
+  # Fires _CHAPTER_RE alone (no section signal).  Returns up to 50 chunks
+  # ordered by chunk_id (position in the chapter).
+
+  - id: "sql_chapter_query_processing"
+    question: "Give me an overview of what chapter 15 covers."
+    expected_answer: >
+      Chapter 15 (Query Processing) explains how a database engine evaluates an SQL
+      query. It starts with an overview of query evaluation — parsing, translation to
+      relational algebra, optimization, and execution — and then defines query cost in
+      terms of disk block transfers and seeks. Selection algorithms range from a linear
+      file scan to index-based lookups using primary or secondary indices, with
+      conjunctive predicates handled by intersection of record pointers. Sorting covers
+      the external merge-sort algorithm. Join algorithms presented include nested-loop
+      join, block nested-loop join, indexed nested-loop join, sort-merge join, and
+      hash join. The chapter also covers projection, duplicate elimination, set
+      operations, outer joins, aggregation, and pipelining of operators.
+    keywords:
+      ["query processing", "query cost", "selection", "join", "merge join",
+       "hash join", "nested-loop join", "external merge-sort", "pipeline",
+       "disk block", "seek", "projection", "aggregation"]
+    similarity_threshold: 0.62
+    ideal_retrieved_chunks: []
+    sql_dispatch_branch: "chapter_only"
+
+  - id: "sql_chapter_recovery"
+    question: "What is chapter 19 about?"
+    expected_answer: >
+      Chapter 19 (Recovery System) covers the techniques that allow a database to
+      survive system crashes and storage failures. It classifies failures into
+      transaction failures, system crashes, and disk failures, and describes the storage
+      hierarchy (volatile, non-volatile, stable). Log-based recovery introduces redo and
+      undo operations using write-ahead logging; checkpoints reduce the amount of log
+      to replay. The full recovery algorithm covers both normal redo and crash-induced
+      undo. Buffer management discusses the force/steal policies. The chapter then covers
+      handling of non-volatile storage failure via database dumps and remote backup for
+      high availability. Early lock release with logical undo and the ARIES algorithm
+      are presented as advanced topics.
+    keywords:
+      ["recovery", "log-based recovery", "write-ahead logging", "checkpoint",
+       "redo", "undo", "force", "steal", "remote backup", "ARIES",
+       "logical undo", "stable storage", "crash"]
+    similarity_threshold: 0.62
+    ideal_retrieved_chunks: []
+    sql_dispatch_branch: "chapter_only"

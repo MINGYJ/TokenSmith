@@ -75,6 +75,9 @@ def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
         index_prefix=args.index_prefix,
         use_multiprocessing=args.multiproc_indexing,
         use_headings=args.embed_with_headings,
+        llm_meta_extraction=cfg.enable_llm_meta_extraction,
+        llm_model_path=cfg.gen_model,
+        llm_meta_max_chunks=cfg.llm_meta_max_chunks,
     )
 
 def use_indexed_chunks(question: str, chunks: list) -> list:
@@ -140,13 +143,17 @@ def get_answer(
         pool_n = max(cfg.num_candidates, cfg.top_k + 10)
         raw_scores: Dict[str, Dict[int, float]] = {}
         for retriever in retrievers:
-            # print(f"Getting scores from retriever: {retriever.name}...")
             raw_scores[retriever.name] = retriever.get_scores(retrieval_query, pool_n, chunks)
-        #SQL Hybird Search:
-        #If SQL detected a structural signal (chapter/section/page), restrict
-        #all other retrievers to only SQL-matched candidates.  This makes the
-        #SQL match a hard filter rather than a soft weight
+
+        # Save a copy of unfiltered scores for the original-search comparison arm.
+        raw_scores_original = {name: dict(s) for name, s in raw_scores.items()}
+
+        # SQL Hybrid Search:
+        # If SQL detected a structural signal (chapter/section/page), restrict
+        # all other retrievers to only SQL-matched candidates.  This makes the
+        # SQL match a hard filter rather than a soft weight.
         sql_hits = raw_scores.get("sql", {})
+        original_ranked_chunks: List[str] = []
         if sql_hits:
             sql_candidates = set(sql_hits.keys())
             print(f"  SQL filter active: restricting to {len(sql_candidates)} candidate(s) from structural match")
@@ -154,10 +161,19 @@ def get_answer(
                 if name != "sql":
                     raw_scores[name] = {k: v for k, v in raw_scores[name].items() if k in sql_candidates}
 
+            # Build original (unfiltered) ranked list for side-by-side comparison.
+            original_scores_no_sql = {k: v for k, v in raw_scores_original.items() if k != "sql"}
+            orig_ordered, _ = ranker.rank(raw_scores=original_scores_no_sql)
+            original_topk = filter_retrieved_chunks(cfg, chunks, orig_ordered)
+            original_ranked_chunks = rerank(
+                question,
+                [chunks[i] for i in original_topk],
+                mode=cfg.rerank_mode,
+                top_n=cfg.rerank_top_k,
+            )
+
         # Step 2: Ranking
         ordered, scores = ranker.rank(raw_scores=raw_scores)
-        # print(f"Ordered candidate indices after ranking: {ordered[:cfg.top_k]}")
-        # print(f"Corresponding scores: {scores[:cfg.top_k]}")
         topk_idxs = filter_retrieved_chunks(cfg, chunks, ordered)
         ranked_chunks = [chunks[i] for i in topk_idxs]
         # print(f"Top-{cfg.top_k} chunk indices after filtering: {topk_idxs}")
@@ -196,8 +212,6 @@ def get_answer(
 
         # Step 3: Final re-ranking
         ranked_chunks = rerank(question, ranked_chunks, mode=cfg.rerank_mode, top_n=cfg.rerank_top_k)
-        # print("Reranked Chunks", type(ranked_chunks), len(ranked_chunks), type(ranked_chunks[0]) if ranked_chunks else "No chunks")
-        # print("Example reranked chunk content:", ranked_chunks[0] if ranked_chunks else "No chunks after reranking")
 
     if not ranked_chunks and not cfg.disable_chunks:
         if console:
@@ -207,57 +221,62 @@ def get_answer(
     # Step 4: Generation
     model_path = cfg.gen_model
     system_prompt = args.system_prompt_mode or cfg.system_prompt_mode
-
     use_double = getattr(args, "double_prompt", False) or cfg.use_double_prompt
 
-    if use_double:
-        stream_iter = double_answer(
-            question,
-            ranked_chunks,
-            model_path,
-            max_tokens=cfg.max_gen_tokens,
-            system_prompt_mode=system_prompt,
-        )
-    else:
-        stream_iter = answer(
-            question,
-            ranked_chunks,
-            model_path,
-            max_tokens=cfg.max_gen_tokens,
-            system_prompt_mode=system_prompt,
-        )
+    def _collect_answer(chunk_list: List[str]) -> str:
+        """Generate a full answer string from a chunk list (non-streaming)."""
+        gen_fn = double_answer if use_double else answer
+        out = ""
+        for delta in gen_fn(
+            question, chunk_list, model_path,
+            max_tokens=cfg.max_gen_tokens, system_prompt_mode=system_prompt
+        ):
+            out += delta
+        return dedupe_generated_text(out)
 
     if is_test_mode:
-        # We do not render MD in the test mode
-        ans = ""
-        for delta in stream_iter:
-            ans += delta
-        ans = dedupe_generated_text(ans)
+        ans = _collect_answer(ranked_chunks)
         return ans, chunks_info, hyde_query
+
+    # Non-test mode: when SQL produced a structural match, run both paths and
+    # display them side by side so results can be compared.
+    if original_ranked_chunks and cfg.enable_sql_hybrid:
+        console.print("\n[bold yellow]━━━ SQL-FILTERED ANSWER━━━[/bold yellow]")
+        sql_ans = _collect_answer(ranked_chunks)
+        console.print(Markdown(sql_ans))
+        console.print("\n[bold blue]━━━ ORIGINAL ANSWER without SQL━━━[/bold blue]")
+        orig_ans = _collect_answer(original_ranked_chunks)
+        console.print(Markdown(orig_ans))
+        ans = sql_ans  # primary answer for logging
     else:
-        # Accumulate the full text while rendering incremental Markdown chunks
+        # Normal single-path streaming output.
+        gen_fn = double_answer if use_double else answer
+        stream_iter = gen_fn(
+            question, ranked_chunks, model_path,
+            max_tokens=cfg.max_gen_tokens, system_prompt_mode=system_prompt
+        )
         ans = render_streaming_ans(console, stream_iter)
 
-        # Logging
-        meta = artifacts.get("meta", [])
-        page_nums = get_page_numbers(topk_idxs, meta)
-        logger.save_chat_log(
-            query=question,
-            config_state=cfg.get_config_state(),
-            ordered_scores=scores[:len(topk_idxs)] if 'scores' in locals() else [],
-            chat_request_params={
-                "system_prompt": system_prompt,
-                "max_tokens": cfg.max_gen_tokens
-            },
-            top_idxs=topk_idxs,
-            chunks=chunks,
-            sources=sources,
-            page_map=page_nums,
-            full_response=ans,
-            top_k=len(topk_idxs),
-            additional_log_info=additional_log_info
-        )
-        return ans
+    # Logging
+    meta = artifacts.get("meta", [])
+    page_nums = get_page_numbers(topk_idxs, meta)
+    logger.save_chat_log(
+        query=question,
+        config_state=cfg.get_config_state(),
+        ordered_scores=scores[:len(topk_idxs)] if scores else [],
+        chat_request_params={
+            "system_prompt": system_prompt,
+            "max_tokens": cfg.max_gen_tokens
+        },
+        top_idxs=topk_idxs,
+        chunks=chunks,
+        sources=sources,
+        page_map=page_nums,
+        full_response=ans,
+        top_k=len(topk_idxs),
+        additional_log_info=additional_log_info
+    )
+    return ans
 
 def render_streaming_ans(console, stream_iter):
     ans = ""

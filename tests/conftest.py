@@ -102,6 +102,12 @@ def pytest_addoption(parser):
         help="Index prefix for tests (overrides config)"
     )
     group.addoption(
+        "--benchmark-file",
+        default="benchmarks.yaml",
+        help="Benchmark YAML file to load, could use SQL benchmark or normal base benchmark"
+             "Example: --benchmark-file=benchmark_SQL.yaml"
+    )
+    group.addoption(
         "--benchmark-ids",
         default=None,
         help="Comma-separated list of benchmark IDs to run (e.g., 'transactions,er_modeling')"
@@ -204,7 +210,7 @@ def benchmarks(pytestconfig, config):
     
     Optionally filters by benchmark IDs if specified.
     """
-    benchmark_file = Path(__file__).parent / "benchmarks.yaml"
+    benchmark_file = Path(__file__).parent / pytestconfig.getoption("--benchmark-file")
     with open(benchmark_file) as f:
         data = yaml.safe_load(f)
     

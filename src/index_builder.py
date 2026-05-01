@@ -20,6 +20,7 @@ from src.embedder import SentenceTransformer
 
 from src.preprocessing.chunking import DocumentChunker, ChunkConfig
 from src.preprocessing.extraction import extract_sections_from_markdown
+from src.preprocessing.llm_meta_extractor import LLMMetaExtractor
 from src.sql.db import build_sql_db, compute_sql_eligible
 
 # ----- runtime parallelism knobs (avoid oversubscription) -----
@@ -44,7 +45,10 @@ def build_index(
     artifacts_dir: os.PathLike,
     index_prefix: str,
     use_multiprocessing: bool = False,
-    use_headings: bool = False
+    use_headings: bool = False,
+    llm_meta_extraction: bool = False,
+    llm_model_path: str = "",
+    llm_meta_max_chunks: int = 200,
 ) -> None:
     """
     Extract sections, chunk, embed, and build both FAISS and BM25 indexes.
@@ -59,6 +63,15 @@ def build_index(
     all_chunks: List[str] = []
     sources: List[str] = []
     metadata: List[Dict] = []
+
+    # LLM fallback extractor — instantiated lazily on first use
+    _extractor: LLMMetaExtractor | None = (
+        LLMMetaExtractor(llm_model_path)
+        if llm_meta_extraction and llm_model_path
+        else None
+    )
+    _llm_enriched_count = 0
+    _llm_budget = llm_meta_max_chunks
 
     # Extract sections from markdown. Exclude some with certain keywords.
     sections = extract_sections_from_markdown(
@@ -152,7 +165,25 @@ def build_index(
                 "chapter": chapter_num,
             }
             sql_eligible, sql_reason = compute_sql_eligible(base_meta)
-            meta = {**base_meta, "sql_eligible": sql_eligible, "sql_reason": sql_reason}
+
+            # LLM fallback: try to recover chapter/section for ineligible chunks
+            llm_enriched = False
+            if not sql_eligible and _extractor is not None and _llm_enriched_count < _llm_budget:
+                recovered = _extractor.extract(clean_chunk, full_section_path)
+                if recovered is not None:
+                    base_meta = {
+                        **base_meta,
+                        "chapter": recovered["chapter"],
+                        "section": recovered["section"] or base_meta["section"],
+                        "page_numbers": recovered["page_numbers"] or base_meta["page_numbers"],
+                    }
+                    sql_eligible, sql_reason = compute_sql_eligible(base_meta)
+                    if sql_eligible:
+                        llm_enriched = True
+                        _llm_enriched_count += 1
+
+            meta = {**base_meta, "sql_eligible": sql_eligible, "sql_reason": sql_reason,
+                    "llm_enriched": llm_enriched}
 
             # Prepare chunk with prefix
             if use_headings:
@@ -236,9 +267,11 @@ def build_index(
     with open(meta_json_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
     sql_eligible_count = sum(1 for m in metadata if m.get("sql_eligible", False))
+    llm_enriched_total = sum(1 for m in metadata if m.get("llm_enriched", False))
+    enrich_note = f", {llm_enriched_total} recovered by LLM" if llm_enriched_total else ""
     print(
         f"Saved intermediate chunks JSON: {meta_json_path} "
-        f"({sql_eligible_count}/{len(metadata)} chunks SQL-eligible)"
+        f"({sql_eligible_count}/{len(metadata)} chunks SQL-eligible{enrich_note})"
     )
 
     # Step 7: Build SQLite metadata database from the intermediate JSON

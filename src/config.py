@@ -57,6 +57,10 @@ class RAGConfig:
     # hybrid SQL retrieval
     enable_sql_hybrid: bool = False
 
+    # LLM fallback metadata extraction (only for sql_eligible=False chunks)
+    enable_llm_meta_extraction: bool = False
+    llm_meta_max_chunks: int = 200
+
     # user feedback modeling
     enable_topic_extraction: bool = False
 

@@ -110,6 +110,10 @@ def build_sql_db(meta_json_path: Path, db_path: Path) -> int:
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("PRAGMA journal_mode=WAL;")
+        # Drop and recreate tables so a re-index always produces a clean DB,
+        # with no stale rows from a previous run with more chunks.
+        conn.execute("DROP TABLE IF EXISTS chunks;")
+        conn.execute("DROP TABLE IF EXISTS documents;")
         conn.execute(_CREATE_DOCUMENTS)
         conn.execute(_CREATE_CHUNKS)
         for idx_sql in _CREATE_INDEXES:
@@ -177,13 +181,75 @@ def build_sql_db(meta_json_path: Path, db_path: Path) -> int:
 
 #SQL Query
 
-def query_chunks_by_chapter(db_path: Path, chapter: int) -> List[int]:
-    """Return FAISS chunk_ids for all chunks in the given chapter."""
+def get_section_names_for_chunks(db_path: Path, chunk_ids: List[int]) -> List[tuple]:
+    """
+    Return distinct (section, count) pairs for the given chunk_ids, sorted by count desc.
+    Used to show the user which sections were matched at the SQL stage.
+    """
+    if not chunk_ids:
+        return []
+    placeholders = ",".join("?" * len(chunk_ids))
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT chunk_id FROM chunks WHERE chapter = ?", (chapter,)
+            f"SELECT section, COUNT(*) as cnt FROM chunks "
+            f"WHERE chunk_id IN ({placeholders}) "
+            f"GROUP BY section ORDER BY cnt DESC",
+            chunk_ids,
         ).fetchall()
+    return [(r[0] or "(no section)", r[1]) for r in rows]
+
+
+def query_chunks_by_chapter(db_path: Path, chapter: int, limit: int = 50) -> List[int]:
+    """Return FAISS chunk_ids for all chunks in the given chapter.
+
+    Parameters
+    ----------
+    limit : cap on returned rows (default 50).  Pass 0 for no limit.
+    """
+    sql = "SELECT chunk_id FROM chunks WHERE chapter = ? ORDER BY chunk_id"
+    params: list = [chapter]
+    if limit and limit > 0:
+        sql += " LIMIT ?"
+        params.append(limit)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(sql, params).fetchall()
     return [r[0] for r in rows]
+
+
+def query_chunks_by_section_numeric(db_path: Path, section_num: str, chapter: int = 0) -> List[int]:
+    """
+    Precise numeric-section lookup for dotted references like '5.1'.
+
+    Matches sections whose heading begins with exactly 'Section <num>' —
+    including subsections (5.1.1, 5.1.2 …) — but excludes false positives
+    such as '25.1' or '5.10' that a plain substring LIKE would incorrectly hit.
+
+    Falls back to the full chapter (capped at 50) if nothing matches.
+    """
+    prefix = f"Section {section_num}"
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT chunk_id FROM chunks
+            WHERE (
+                section = ?
+                OR section LIKE ?
+                OR section LIKE ?
+            )
+            AND (? = 0 OR chapter = ?)
+            """,
+            (prefix, f"{prefix} %", f"{prefix}.%", chapter, chapter),
+        ).fetchall()
+        chunk_ids = [r[0] for r in rows]
+
+        if not chunk_ids and chapter != 0:
+            rows = conn.execute(
+                "SELECT chunk_id FROM chunks WHERE chapter = ? ORDER BY chunk_id LIMIT 50",
+                (chapter,),
+            ).fetchall()
+            chunk_ids = [r[0] for r in rows]
+
+    return chunk_ids
 
 
 def query_chunks_by_section(db_path: Path, section_keyword: str, chapter: int = 0) -> List[int]:
